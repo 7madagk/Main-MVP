@@ -13,36 +13,37 @@ app.use(cors({
 }));
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const PROMPT_ID_A    = process.env.PROMPT_ID_A;
+const PROMPT_ID_B    = process.env.PROMPT_ID_B;
 
 if (!OPENAI_API_KEY) {
   console.error('Missing OPENAI_API_KEY environment variable');
   process.exit(1);
 }
 
-const OPENAI_BASE = 'https://api.openai.com/v1/chat/completions';
-const MODEL       = 'gpt-4o-mini';
+// OpenAI Responses API (supports prompt IDs)
+async function callOpenAI({ promptId, messages, maxTokens = 1000 }) {
+  const input = messages.map(m => ({
+    role: m.role,
+    content: m.content
+  }));
 
-const SYSTEM_A = process.env.SYSTEM_A ||
-  'أنت مساعد تعليمي متخصص في التفاضل الجزئي لطلاب Math 2. أسلوبك مختصر وبالعامية المصرية.';
+  const body = {
+    max_output_tokens: maxTokens,
+    input
+  };
 
-const SYSTEM_B = process.env.SYSTEM_B ||
-  'أنت مساعد تعليمي متخصص في التفاضل الجزئي لطلاب Math 2 في الجامعة. أسلوبك بسيط وودود وبالعامية المصرية مع استخدام LaTeX للمعادلات. اشرح خطوة خطوة، كن موجزاً، شجع الطالب.';
+  if (promptId) {
+    body.prompt = { id: promptId };
+  }
 
-async function callOpenAI({ system, messages, maxTokens = 1000 }) {
-  const response = await fetch(OPENAI_BASE, {
+  const response = await fetch('https://api.openai.com/v1/responses', {
     method:  'POST',
     headers: {
       'Content-Type':  'application/json',
       'Authorization': `Bearer ${OPENAI_API_KEY}`
     },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      messages: [
-        { role: 'system', content: system },
-        ...messages
-      ]
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -52,10 +53,16 @@ async function callOpenAI({ system, messages, maxTokens = 1000 }) {
 
   const data = await response.json();
 
-  // Convert OpenAI response format to match what frontend expects
-  return {
-    content: [{ text: data.choices[0].message.content }]
-  };
+  // Extract text from Responses API format
+  const text = data.output
+    ?.filter(o => o.type === 'message')
+    ?.flatMap(o => o.content)
+    ?.filter(c => c.type === 'output_text')
+    ?.map(c => c.text)
+    ?.join('') || 'حصل خطأ.';
+
+  // Return in format frontend expects
+  return { content: [{ text }] };
 }
 
 // Chat A — Sidebar AI
@@ -64,7 +71,7 @@ app.post('/api/chat-a', async (req, res) => {
     const { messages, max_tokens } = req.body;
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: 'messages array required' });
-    const data = await callOpenAI({ system: SYSTEM_A, messages, maxTokens: max_tokens || 600 });
+    const data = await callOpenAI({ promptId: PROMPT_ID_A, messages, maxTokens: max_tokens || 600 });
     res.json(data);
   } catch (err) {
     console.error('[chat-a]', err.message);
@@ -78,7 +85,7 @@ app.post('/api/chat-b', async (req, res) => {
     const { messages, max_tokens } = req.body;
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: 'messages array required' });
-    const data = await callOpenAI({ system: SYSTEM_B, messages, maxTokens: max_tokens || 1000 });
+    const data = await callOpenAI({ promptId: PROMPT_ID_B, messages, maxTokens: max_tokens || 1000 });
     res.json(data);
   } catch (err) {
     console.error('[chat-b]', err.message);
